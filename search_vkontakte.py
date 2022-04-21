@@ -1,6 +1,5 @@
 import os
 import requests
-import vk_api
 from typing import List, Dict
 from ibex.models.post import Post, Scores
 from ibex.models.collect_task import CollectTask
@@ -21,10 +20,10 @@ class VKCollector(ABC):
         # TODO: double check the limit per post
 
         # Variable for maximum number of posts per request
-        self.max_posts_per_call = 10
+        self.max_posts_per_call = 30
 
         # Variable for maximum number of requests
-        self.max_requests = 20
+        self.max_requests = 22
 
     def get_posts_by_params(self, params: Dict):
 
@@ -48,7 +47,7 @@ class VKCollector(ABC):
                 post_iterator += 1
                 data = self.get_posts(params, data['next_from'])
                 posts = posts + data['items']
-            if post_iterator > 20:
+            if post_iterator > self.max_requests:
                 break
         return posts
 
@@ -91,7 +90,6 @@ class VKCollector(ABC):
             params['q'] = collect_task.query
         if collect_task.accounts is not None and len(collect_task.accounts) > 0:
             params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
-
         return params
 
     # @abstractmethod
@@ -115,7 +113,6 @@ class VKCollector(ABC):
 
         # list of posts with type of Post for every element
         posts = self._map_to_posts(results, params)
-
         return posts
 
     # @abstractmethod

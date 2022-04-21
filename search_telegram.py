@@ -5,50 +5,34 @@ from typing import List, Dict
 from ibex.models.post import Post, Scores
 from ibex.models.collect_task import CollectTask
 from ibex.models.platform import Platform
-from abc import ABC, abstractmethod
+from abc import ABC
 
 
 class TelegramCollector(ABC):
-    """The abstract class for data collectors.
+    """The class for data collection from TelegramClient.
 
         All data collectors/data sources implement
         methods described below.
     """
+
     def __init__(self, *args, **kwargs):
         # hash parameter for authorization.
         self.hash = os.getenv('TELEGRAM_HASH')
 
         # id parameter for authorization.
-        self.id = 11607483
-
-        # offset parameter for paging.
-        self.offset = 0
+        self.id = os.getenv('TELEGRAM_ID')
 
         # TODO: double check the limit per post
         # Variable for maximum number of posts per request
-        self.max_posts_per_call = 100
+        self.max_posts_per_call = 10000
 
         # Variable for maximum number of requests
         self.max_requests = 20
 
     def generate_req_params(self, collect_task: CollectTask):
-        """ The method to generate parameters.
-
-        Args:
-            collect_action(CollectTask): CollectTask object holds
-            all the metadata needed for data collection.
-        """
-
-        # Dict Variable params for generating metadata
         params = dict(
-            id=self.id,
-            hash=self.hash,
             count=self.max_posts_per_call,
-            offset=self.offset,
-            start_time=collect_task.date_from,
-            end_time=collect_task.date_to,
         )
-
         if collect_task.query is not None and len(collect_task.query) > 0:
             params['q'] = collect_task.query
         if collect_task.accounts is not None and len(collect_task.accounts) > 0:
@@ -56,7 +40,6 @@ class TelegramCollector(ABC):
 
         return params
 
-    # @abstractmethod
     async def collect(self, collect_task: CollectTask) -> List[Post]:
         """The method is responsible for collecting posts
             from platforms.
@@ -73,7 +56,7 @@ class TelegramCollector(ABC):
         params = self.generate_req_params(collect_task)
 
         # Variable for TelegramClient instance
-        client = TelegramClient('name', params['id'], params['hash'])
+        client = TelegramClient('username', self.id, self.hash)
         await client.start()
 
         # List variable for all posts data.
@@ -81,24 +64,35 @@ class TelegramCollector(ABC):
 
         # Boolean variable for looping through pages.
         next_from = True
-
-        # Variable for getting all the channels or chats for user.
-        dialogs = await client.get_dialogs()
+        dialog_name = ''
+        if collect_task.accounts:
+            dialog_name = collect_task.accounts[0].platform_id
 
         # Variables for searching through date range.
-        pre_first_msg = await client.get_messages(dialogs[0].name, offset_date=params['start_time'], limit=1)
-        first_msg = await client.get_messages(dialogs[0].name,  min_id=pre_first_msg[0].id, limit=1)
-        last_msg = await client.get_messages(dialogs[0].name, offset_date=params['end_time'], limit=1)
+        pre_first_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_from, limit=1)
+        first_msg = await client.get_messages(dialog_name, min_id=pre_first_msg[0].id, limit=1)
+        last_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_to, limit=1)
+
+        offset = 0
         while next_from:
-            messages = await client.get_messages(dialogs[0].name, search=params['q'][:7], min_id=last_msg[0].id, max_id=first_msg[0].id, add_offset=params['offset'], limit=params['count'])
+            messages = await client.get_messages(dialog_name,
+                                                 search=collect_task.query,
+                                                 min_id=last_msg[0].id,
+                                                 max_id=first_msg[0].id,
+                                                 add_offset=offset,
+                                                 limit=self.max_posts_per_call
+                                                 )
+
             if len(messages) < params['count']:
                 next_from = False
-            params['offset'] = params['offset'] + params['count']
-            posts = posts + self._map_to_posts(messages, params)
-        print(posts)
-        return posts
 
-    # @abstractmethod
+            offset += params['count']
+            posts += messages
+
+        maped_posts = self._map_to_posts(posts, collect_task)
+        print(f'{len(maped_posts)} posts collected from dialog: {dialog_name}')
+        return maped_posts
+
     async def get_hits_count(self, collect_task: CollectTask) -> int:
         """The method is responsible for collecting the number of posts,
             that satisfy all criterias in CollectTask object.
@@ -119,7 +113,7 @@ class TelegramCollector(ABC):
         params = self.generate_req_params(collect_task)
 
         # Variable for TelegramClient instance
-        client = TelegramClient('name', params['id'], params['hash'])
+        client = TelegramClient('name', self.id, self.hash)
         await client.start()
 
         # Boolean variable for looping through pages.
@@ -129,23 +123,25 @@ class TelegramCollector(ABC):
         hits_count = 0
 
         # Variable for getting all the channels or chats for user.
-        dialogs = await client.get_dialogs()
-
+        dialog_name = ''
+        if collect_task.accounts:
+            dialog_name = collect_task.accounts[0].platform_id
         # Variables for searching through date range.
-        pre_first_msg = await client.get_messages(dialogs[0].name, offset_date=params['start_time'], limit=1)
-        first_msg = await client.get_messages(dialogs[0].name,  min_id=pre_first_msg[0].id, limit=1)
-        last_msg = await client.get_messages(dialogs[0].name, offset_date=params['end_time'], limit=1)
+        pre_first_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_from, limit=1)
+        first_msg = await client.get_messages(dialog_name, min_id=pre_first_msg[0].id, limit=1)
+        last_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_to, limit=1)
 
+        offset = 0
         while next_from:
-            messages = await client.get_messages(dialogs[0].name, search=params['q'][:7], min_id=last_msg[0].id, max_id=first_msg[0].id, add_offset=params['offset'], limit=params['count'])
+            messages = await client.get_messages(dialog_name, search=collect_task.query, min_id=last_msg[0].id,
+                                                 max_id=first_msg[0].id, add_offset=offset,
+                                                 limit=params['count'])
             if len(messages) < params['count']:
-                hits_count = params['offset'] + len(messages)
+                hits_count = offset + len(messages)
                 next_from = False
-            params['offset'] = params['offset'] + params['count']
-        print(hits_count)
+            offset = offset + params['count']
         return hits_count
 
-    # @abstractmethod
     @staticmethod
     def map_to_post(api_post: Dict, collect_task: CollectTask) -> Post:
         """The method is responsible for mapping data redudned by plarform api
@@ -160,7 +156,7 @@ class TelegramCollector(ABC):
         """
 
         scores = Scores(
-            likes=api_post.replies,
+            likes=api_post.replies, # Temporarily saved to likes.
             shares=api_post.forwards,
         )
         post_doc = ''
@@ -180,7 +176,6 @@ class TelegramCollector(ABC):
             print(exc)
         return post_doc
 
-    # @abstractmethod
     def _map_to_posts(self, posts: List[Dict], collect_task: CollectTask):
         res: List[Post] = []
         for post in posts:
