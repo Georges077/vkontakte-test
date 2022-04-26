@@ -91,6 +91,7 @@ class TelegramCollector(ABC):
 
         maped_posts = self._map_to_posts(posts, collect_task)
         print(f'{len(maped_posts)} posts collected from dialog: {dialog_name}')
+        await client.disconnect()
         return maped_posts
 
     async def get_hits_count(self, collect_task: CollectTask) -> int:
@@ -140,6 +141,7 @@ class TelegramCollector(ABC):
                 hits_count = offset + len(messages)
                 next_from = False
             offset = offset + params['count']
+        await client.disconnect()
         return hits_count
 
     @staticmethod
