@@ -197,7 +197,7 @@ class YoutubeCollector:
             params['channelId'] = collect_task.accounts[0].platform_id
         return params
 
-    async def search_accounts(self, collect_task: CollectTask) -> List[Account]:
+    async def get_accounts(self, collect_task: CollectTask) -> List[Account]:
         params = self.generate_account_request_params(collect_task)
         req_url = "https://www.googleapis.com/youtube/v3/search"
         res = requests.get(req_url, params)
