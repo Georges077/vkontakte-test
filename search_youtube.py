@@ -222,7 +222,7 @@ class YoutubeCollector:
             title=acc['snippet']['channelTitle'],
             tags=[acc['etag']],
             img=acc['snippet']['thumbnails']['default']['url'],
-            url=acc['snippet']['thumbnails']['default']['url'],
+            url='',
             platform=Platform.youtube,
             platform_id=acc['id']['channelId'],
             broadcasting_start_time=acc['snippet']['publishTime'],
