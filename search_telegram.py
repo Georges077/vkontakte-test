@@ -192,20 +192,18 @@ class TelegramCollector(ABC):
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
-    def generate_params(self, collect_task: CollectTask):
+    def generate_params(self, query:str):
         params = dict(
             limit=5,
         )
-        if collect_task.query is not None and len(collect_task.query) > 0:
-            params['q'] = collect_task.query
-        # if collect_task.accounts is not None and len(collect_task.accounts) > 0:
-        #     params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
+        if query is not None and len(query) > 0:
+            params['q'] = query
 
         return params
 
-    async def get_accounts(self, collect_task: CollectTask) -> List[Account]:
+    async def get_accounts(self, query: str) -> List[Account]:
         # Dict variable for generated meta data.
-        params = self.generate_params(collect_task)
+        params = self.generate_params(query)
 
         # Variable for TelegramClient instance
         client = TelegramClient('username', self.id, self.hash)
@@ -218,11 +216,11 @@ class TelegramCollector(ABC):
         ))
 
         # List variable for all accounts data.
-        accounts = self.map_to_accounts(dialogs.chats, collect_task)
+        accounts = self.map_to_accounts(dialogs.chats)
 
         return accounts
 
-    def map_to_accounts(self, accounts: List, collect_task: CollectTask) -> List[Account]:
+    def map_to_accounts(self, accounts: List) -> List[Account]:
         """The method is responsible for mapping data redudned by plarform api
                    into Account class.
 
@@ -236,13 +234,13 @@ class TelegramCollector(ABC):
         result: List[Account] = []
         for account in accounts:
             try:
-                account = self.map_to_acc(account, collect_task)
+                account = self.map_to_acc(account)
                 result.append(account)
             except ValueError as e:
-                print({collect_task.platform}, e)
+                print("Telegram", e)
         return result
 
-    def map_to_acc(self, acc: Account, collect_task: CollectTask) -> Account:
+    def map_to_acc(self, acc: Account) -> Account:
         mapped_account = Account(
             title=acc.title,
             url='t.me/'+acc.username,

@@ -178,45 +178,44 @@ class YoutubeCollector:
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
-    def generate_account_request_params(self, collect_task: CollectTask):
+    def generate_account_request_params(self, query):
+        collect_task = CollectTask(date_from=datetime(2022, 4, 1), date_to=datetime(2022, 4, 10))
         if collect_task.accounts is not None and len(collect_task.accounts) > 1:
             self.log.error('[YouTube] Can not collect data from mode than one channel per call!')
 
         params = dict(
             part='snippet',
             maxResults=5,
-            publishedAfter=f'{collect_task.date_from.isoformat()[:19]}Z',
-            publishedBefore=f'{collect_task.date_to.isoformat()[:19]}Z',
             key=self.token,
             order='relevance',
             type='channel'
         )
-        if collect_task.query is not None and len(collect_task.query) > 0:
+        if query is not None and len(query) > 0:
             params['q'] = collect_task.query
         if collect_task.accounts is not None and len(collect_task.accounts) == 1:
             params['channelId'] = collect_task.accounts[0].platform_id
         return params
 
-    async def get_accounts(self, collect_task: CollectTask) -> List[Account]:
-        params = self.generate_account_request_params(collect_task)
+    async def get_accounts(self, query:str)-> List[Account]:
+        params = self.generate_account_request_params(query)
         req_url = "https://www.googleapis.com/youtube/v3/search"
         res = requests.get(req_url, params)
         acc = res.json()['items']
-        accounts = self.map_to_accounts(acc, collect_task)
+        accounts = self.map_to_accounts(acc)
 
         return accounts
 
-    def map_to_accounts(self, accounts: List, collect_task: CollectTask) -> List[Account]:
+    def map_to_accounts(self, accounts: List) -> List[Account]:
         result: List[Account] = []
         for account in accounts:
             try:
-                account = self.map_to_acc(account, collect_task)
+                account = self.map_to_acc(account)
                 result.append(account)
             except ValueError as e:
-                print({collect_task.platform}, e)
+                print("Youtube", e)
         return result
 
-    def map_to_acc(self, acc: Account, collect_task: CollectTask) -> Account:
+    def map_to_acc(self, acc: Account) -> Account:
         mapped_account = Account(
             id=acc['id']['channelId'],
             title=acc['snippet']['channelTitle'],

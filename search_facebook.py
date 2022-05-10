@@ -151,32 +151,32 @@ class FacebookCollector:
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
-    async def get_accounts(self, collect_task: CollectTask) -> List[Account]:
-        params = self.generate_acc_req_params(collect_task)
+    async def get_accounts(self, query) -> List[Account]:
+        params = self.generate_acc_req_params(query)
         res = requests.get("https://graph.facebook.com/pages/search", params)
         acc = res.json()['items']
-        accounts = self.map_to_accounts(acc, collect_task)
+        accounts = self.map_to_accounts(acc, query)
         return accounts
 
-    def generate_acc_req_params(self, collect_task: CollectTask):
+    def generate_acc_req_params(self, query: str):
         params = dict(
-            q=collect_task.query,
+            q=query,
             fields=['id', 'name', 'location', 'link'],
             access_token=self.token,
         )
         return params
 
-    def map_to_accounts(self, accounts: List, collect_task: CollectTask) -> List[Account]:
+    def map_to_accounts(self, accounts: List) -> List[Account]:
         result: List[Account] = []
         for account in accounts:
             try:
-                account = self.map_to_acc(account, collect_task)
+                account = self.map_to_acc(account)
                 result.append(account)
             except ValueError as e:
-                print({collect_task.platform}, e)
+                print('Facebook', e)
         return result
 
-    def map_to_acc(self, acc: Account, collect_task: CollectTask) -> Account:
+    def map_to_acc(self, acc: Account) -> Account:
         mapped_acc = Account(
             title=acc['name'],
             url=acc['link'],

@@ -181,24 +181,23 @@ class VKCollector(ABC):
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
-    def generate_params(self, collect_task: CollectTask):
+    def generate_params(self, query):
         """ The method is responsible for generating params
 
         Args:
             collect_action(CollectTask): CollectTask object holds
                 all the metadata.
         """
+        collect_task = CollectTask(date_from=datetime(2022, 4, 1), date_to=datetime(2022, 4, 10))
         params = dict(
             access_token=self.token,
             limit=5,
             fields=[''],
-            start_time=int(collect_task.date_from.strftime('%s')),
-            end_time=int(collect_task.date_to.strftime('%s')),
             v=5.82,
         )
 
-        # if collect_task.query is not None and len(collect_task.query) > 0:
-        #     params['q'] = collect_task.query
+        if query is not None and len(query) > 0:
+            params['q'] = query
         if collect_task.accounts is not None and len(collect_task.accounts) > 0:
             params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
         return params
@@ -215,11 +214,10 @@ class VKCollector(ABC):
 
         # Variable for data returned from request
         req = requests.get(url, params)
-        print(req.json())
         return req.json()['response']['items']
 
     # @abstractmethod
-    async def get_accounts(self, collect_task: CollectTask) -> List[Account]:
+    async def get_accounts(self, query) -> List[Account]:
         """The method is responsible for collecting Accounts
               from platforms.
 
@@ -231,7 +229,7 @@ class VKCollector(ABC):
               (List[Account]): List of collected accounts.
           """
         # parameter for generated metadata
-        params = self.generate_params(collect_task)
+        params = self.generate_params(query)
 
         # list of posts returned by method
         results: List[any] = self.get_acc(params)
@@ -261,11 +259,25 @@ class VKCollector(ABC):
         return result
 
     def map_to_acc(self, acc: Account, collect_task: CollectTask) -> Account:
+        group_id = ''
+        group_name = ''
+        group_photo = ''
+        group_url = ''
+        if 'group' in str(acc):
+            group_id = acc['group']['id']
+            group_photo = acc['group']['photo_100']
+            group_name = acc['group']['name']
+            group_url = acc['group']['screen_name']
+        if 'profile' in str(acc):
+            group_id = acc['profile']['id']
+            group_photo = acc['profile']['first_name']
+            group_name = ''
+            group_url = ''
         mapped_account = Account(
-            title=acc['group']['name'],
-            url='vk.com/'+acc['group']['screen_name'],
+            title=group_name,
+            url='vk.com/' + group_url,
             platform=Platform.vkontakte,
-            platform_id=acc['group']['id'],
-            img=acc['group']['photo_100']
+            platform_id=group_id,
+            img=group_photo
         )
         return mapped_account
