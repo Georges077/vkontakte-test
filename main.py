@@ -15,7 +15,7 @@ from datetime import datetime
 from ibex_models import Platform
 from beanie.odm.operators.find.comparison import In
 
-os.environ['MONGO_CS'] = 'mongodb+srv://giorgi:8TIjM5usTviU7QRf@ibexcluster.otmko.mongodb.net/ibex?retryWrites=true&w=majority'
+os.environ['MONGO_CS'] = 'mongodb+srv://[user]:[password]@ibexcluster.otmko.mongodb.net/ibex?retryWrites=true&w=majority'
 
 class AccountReques(BaseModel):
     title: str
