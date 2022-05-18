@@ -15,12 +15,16 @@ from datetime import datetime
 from ibex_models import Platform
 from beanie.odm.operators.find.comparison import In
 
-os.environ['MONGO_CS'] = 'mongodb+srv://[user]:[password]@ibexcluster.otmko.mongodb.net/ibex?retryWrites=true&w=majority'
+os.environ[
+    'MONGO_CS'] = 'mongodb+srv://giorgi:8TIjM5usTviU7QRf@ibexcluster.otmko.mongodb.net/ibex?retryWrites=true&w=majority'
+
 
 class AccountReques(BaseModel):
     title: str
     platform: Platform
     platform_id: str
+    url: str
+
 
 class PostMonitor(BaseModel):
     title: str
@@ -43,12 +47,6 @@ class PostMonitorEdit(BaseModel):
     languages: Optional[List[str]]
 
 
-class SearchTermInit(BaseModel):
-    id: UUID = Field(default_factory=uuid4, alias='_id')
-    tags: List[str] = []
-    term: str = ''
-
-
 async def mongo(classes):
     mongodb_connection_string = os.getenv('MONGO_CS')
     client = motor.motor_asyncio.AsyncIOMotorClient(mongodb_connection_string)
@@ -61,34 +59,36 @@ async def create_monitor(postMonitor: PostMonitor) -> Monitor:
     monitor = Monitor(
         title=postMonitor.title,
         descr=postMonitor.descr,
-        collect_actions = [],
+        collect_actions=[],
         date_from=postMonitor.date_from,
         date_to=postMonitor.date_to
     )
     # print(monitor.id, type(monitor.id), type(str(monitor.id)))
     search_terms = [SearchTerm(
-            term=search_term,
-            tags=[str(monitor.id)]
-        ) for search_term in postMonitor.search_terms]
+        term=search_term,
+        tags=[str(monitor.id)]
+    ) for search_term in postMonitor.search_terms]
 
     accounts = [Account(
-            title=account.title,
-            platform=account.platform,
-            platform_id=account.platform_id,
-            tags=[str(monitor.id)],
-            url=''
-        ) for account in postMonitor.accounts]
+        title=account.title,
+        platform=account.platform,
+        platform_id=account.platform_id,
+        tags=[str(monitor.id)],
+        url=''
+    ) for account in postMonitor.accounts]
 
-    platforms = postMonitor.platforms if postMonitor.platforms and len(postMonitor.platforms) else [account.platform for account in postMonitor.accounts]
+    platforms = postMonitor.platforms if postMonitor.platforms and len(postMonitor.platforms) else [account.platform for
+                                                                                                    account in
+                                                                                                    postMonitor.accounts]
 
     # Create single CollectAction per platform
     collect_actions = [CollectAction(
-            monitor_id=monitor.id,
-            platform=platform,
-            search_term_tags = [str(monitor.id)],
-            account_tags=[str(monitor.id)],
-            tags=[],
-        ) for platform in platforms]
+        monitor_id=monitor.id,
+        platform=platform,
+        search_term_tags=[str(monitor.id)],
+        account_tags=[str(monitor.id)],
+        tags=[],
+    ) for platform in platforms]
 
     monitor.collect_actions = [collect_action.id for collect_action in collect_actions]
 
@@ -130,16 +130,26 @@ async def edit_monitor(postMonitor: PostMonitorEdit) -> Monitor:
                 search_term = SearchTerm(term=row, tags=[str(postMonitor.id)])
                 await SearchTerm.insert_one(search_term)
 
-
-
-    # if accounts are passed, it needs to be compared to existing list and 
+    # if accounts are passed, it needs to be compared to existing list and
     # and if changes are made, existing records needs to be modified
     # accounts: List[AccountReques]
+    accounts = []
+    for account in postMonitor.accounts:
+        acc_result = await Account.find(
+            {Account.platform_id: account.platform_id} or {Account.platform: account.platform}).to_list()
+        for acc in acc_result:
+            if acc.title != account.title:
+                await acc.set({"title": account.title})
+        if not len(acc_result):
+            accounts.append(Account(
+                title=account.title,
+                platform=account.platform,
+                platform_id=account.platform_id,
+                tags=[str(postMonitor.id)],
+                url=''))
+    if len(accounts): await Account.insert_many(accounts)
 
-
-
-
-    # if platforms are passed, it needs to be compared to existing list and 
+    # if platforms are passed, it needs to be compared to existing list and
     # and if changes are made, existing records needs to be modified
     # platforms: Optional[List[Platform]]
 
@@ -150,11 +160,12 @@ async def edit_monitor(postMonitor: PostMonitorEdit) -> Monitor:
 
 post_mon_edit = PostMonitorEdit(
     id=UUID('b1936d71-542f-441f-b535-2344ab1a463d'),
-    search_terms=["Ukraine", "Russia", "USA", "BBC","CNN", "Alia"],
+    search_terms=["Ukraine", "Russia", "USA", "BBC", "CNN", "Alia"],
     accounts=[AccountReques(
-        title="Ukraine",
+        title="Russia",
         platform="youtube",
-        platform_id='flkjfogjfe2542342352'
+        url="www.youtube.com",
+        platform_id='flkjfogjfe2542342344'
     )]
 )
 
