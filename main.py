@@ -20,6 +20,7 @@ os.environ[
 
 
 class AccountReques(BaseModel):
+    id: Optional[UUID]
     title: str
     platform: Platform
     platform_id: str
@@ -109,60 +110,76 @@ async def edit_monitor(postMonitor: PostMonitorEdit) -> Monitor:
     if postMonitor.date_from: monitor.date_from = postMonitor.date_from
     if postMonitor.date_to: monitor.date_to = postMonitor.date_to
 
-    # if search terms are passed, it needs to be compared to existing list and
-    # and if changes are made, existing records needs to be modified
-    # search_terms: List[str]
-    search_result = await SearchTerm.find(In(SearchTerm.tags, [postMonitor.id])).to_list()
-    for res in search_result:
-        if res.term not in postMonitor.search_terms:
-            while postMonitor.id in res.tags:
-                res.tags.remove(postMonitor.id)
-            st = SearchTerm.find(SearchTerm.id == res.id)
-            await st.set({SearchTerm.tags: res.tags})
-    for row in postMonitor.search_terms:
-        if row not in search_result:
-            term = SearchTerm.find(In(SearchTerm.term, [row]))
-            for t in await term.to_list():
-                if postMonitor.id not in t.tags:
-                    t.tags.append(postMonitor.id)
-                await t.set({SearchTerm.tags: t.tags})
-            if not await term.to_list():
-                search_term = SearchTerm(term=row, tags=[str(postMonitor.id)])
-                await SearchTerm.insert_one(search_term)
-
-    # if accounts are passed, it needs to be compared to existing list and
-    # and if changes are made, existing records needs to be modified
-    # accounts: List[AccountReques]
-    accounts = []
-    for account in postMonitor.accounts:
-        acc_result = await Account.find(
-            {Account.platform_id: account.platform_id} or {Account.platform: account.platform}).to_list()
-        for acc in acc_result:
-            if acc.title != account.title:
-                await acc.set({"title": account.title})
-        if not len(acc_result):
-            accounts.append(Account(
-                title=account.title,
-                platform=account.platform,
-                platform_id=account.platform_id,
-                tags=[str(postMonitor.id)],
-                url=''))
-    if len(accounts): await Account.insert_many(accounts)
+    await modify_monitor_search_terms(postMonitor)
+    await modify_monitor_accounts(postMonitor)
 
     # if platforms are passed, it needs to be compared to existing list and
     # and if changes are made, existing records needs to be modified
     # platforms: Optional[List[Platform]]
 
-    # if languages are passed, it needs to be compared to existing list and 
+    # if languages are passed, it needs to be compared to existing list and
     # and if changes are made, existing records needs to be modified
     # languages: Optional[List[str]]
 
+
+async def modify_monitor_search_terms(postMonitor):
+    # if search terms are passed, it needs to be compared to existing list and
+    # and if changes are made, existing records needs to be modified
+    # finding search terms in db which are no longer preseng in the post request
+    db_search_terms: List[SearchTerm] = await SearchTerm.find(In(SearchTerm.tags, [postMonitor.id])).to_list()
+    db_search_terms_to_to_remove_from_db: List[SearchTerm] = [search_term for search_term in db_search_terms if
+                                                              search_term not in postMonitor.search_terms]
+
+    for search_term in db_search_terms_to_to_remove_from_db:
+        search_term.tags = [tag for tag in search_term.tags if tag != postMonitor.id]
+        await search_term.save()
+
+    # finding search terms that are not taged in db
+    db_search_terms_strs: List[str] = [search_term.term for search_term in db_search_terms]
+    search_terms_to_add_to_db: List[str] = [search_term for search_term in postMonitor.search_terms if
+                                            search_term not in db_search_terms_strs]
+
+    searchs_to_insert = []
+    for search_term_str in search_terms_to_add_to_db:
+        db_search_term = await SearchTerm.find(SearchTerm.term == search_term_str).to_list()
+        if db_search_term[0]:
+            # If same keyword exists in db, monitor.id is added to it's tags list
+            db_search_term[0].tags.append(str(postMonitor.id))
+            await db_search_term[0].save()
+        else:
+            # If keyword does not exists in db, new keyword is created
+            searchs_to_insert.append(SearchTerm(term=search_term_str, tags=[str(postMonitor.id)]))
+    if len(searchs_to_insert): await SearchTerm.insert_many(searchs_to_insert)
+
+
+async def modify_monitor_accounts(postMonitor):
+    # if accounts are passed, it needs to be compared to existing list and
+    # and if changes are made, existing records needs to be modified
+    # accounts: List[AccountReques]
+    db_accounts: List[SearchTerm] = await Account.find(In(Account.tags, [postMonitor.id])).to_list()
+    account_not_in_monitor = lambda db_account: len(
+        [account for account in postMonitor.accounts if account == db_account.id]) == 0
+    db_accounts_terms_to_to_remove_from_db: List[Account] = [account for account in db_accounts if
+                                                             account_not_in_monitor(account)]
+
+    for account in db_accounts_terms_to_to_remove_from_db:
+        account.tags = [tag for tag in account.tags if tag != postMonitor.id]
+        await account.save()
+
+    accounts_to_insert = [Account(
+        title=account.title,
+        platform=account.platform,
+        platform_id=account.platform_id,
+        tags=[str(postMonitor.id)],
+        url='') for account in postMonitor.accounts if not account.id]
+
+    if len(accounts_to_insert): await Account.insert_many(accounts_to_insert)
 
 post_mon_edit = PostMonitorEdit(
     id=UUID('b1936d71-542f-441f-b535-2344ab1a463d'),
     search_terms=["Ukraine", "Russia", "USA", "BBC", "CNN", "Alia"],
     accounts=[AccountReques(
-        title="Russia",
+        title="USA",
         platform="youtube",
         url="www.youtube.com",
         platform_id='flkjfogjfe2542342344'
