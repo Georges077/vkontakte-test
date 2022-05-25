@@ -1,7 +1,9 @@
+import asyncio
 import os
 from datetime import datetime
+from eldar import Query
 from telethon.sync import TelegramClient
-from telethon import functions
+from telethon import functions, types
 from typing import List, Dict
 from ibex.models.post import Post, Scores
 from ibex.models.collect_task import CollectTask
@@ -36,11 +38,63 @@ class TelegramCollector(ABC):
             count=self.max_posts_per_call,
         )
         if collect_task.query is not None and len(collect_task.query) > 0:
-            params['q'] = collect_task.query
+            query_arr = []
+            if ')' in collect_task.query.lower():
+                query = collect_task.query.lower()
+                q1 = query[:query.index(')')+5].replace(')', '').replace('(', '')
+                if q1.split()[-1] == 'and':
+                    query_arr = q1.split()[:-1]
+                    if 'or' in query_arr:
+                        query_arr.remove('or')
+                    if 'not' in query_arr:
+                        query_arr.pop(query_arr.index('not')+1)
+                        query_arr.remove('not')
+                else:
+                    query1 = collect_task.query.lower()
+                    q2 = ' '.join(query1.replace('(', '').replace(')', '').split()).replace('not ', 'nnn').split()
+                    q2 = [val for val in q2 if val != 'and' and val != 'or']
+                    q2 = [val for val in q2 if val != 'or']
+                    q2 = [val for val in q2 if 'nnn' not in val]
+                    q2 = list(dict.fromkeys(q2))
+                    query_arr = q2
+
+            q3 = collect_task.query.lower()
+            q3 = ' '.join(q3.split()).replace('not ', 'nnn').split()
+            q3 = [val for val in q3 if 'nnn' not in val]
+            q3 = [val for val in q3 if val != 'and' and val != 'or']
+            q3 = list(dict.fromkeys(q3))
+            if 'and' in collect_task.query.lower():
+                query_arr = [q3[0]]
+            else:
+                query_arr = q3
+            params['q'] = query_arr
+
         if collect_task.accounts is not None and len(collect_task.accounts) > 0:
             params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
 
         return params
+
+    async def get_data(self, client: TelegramClient, collect_task: CollectTask, params, q) -> List[types.Message]:
+        f_data = []
+        offset = 0
+        next_from = True
+        while next_from:
+            messages = await client.get_messages(params['dialog_name'],
+                                                     search=q,
+                                                     min_id=params['last_msg'][0].id,
+                                                     max_id=params['first_msg'][0].id,
+                                                     add_offset=offset,
+                                                     limit=self.max_posts_per_call
+                                                     )
+            if len(messages) < params['count']:
+                next_from = False
+
+            offset += params['count']
+            eldar = Query(collect_task.query)
+            for msg in messages:
+                if len(eldar.filter([msg.text])) > 0:
+                    f_data += [msg]
+        return f_data
 
     async def collect(self, collect_task: CollectTask) -> List[Post]:
         """The method is responsible for collecting posts
@@ -64,37 +118,22 @@ class TelegramCollector(ABC):
         # List variable for all posts data.
         posts = []
 
-        # Boolean variable for looping through pages.
-        next_from = True
-        dialog_name = ''
         if collect_task.accounts:
-            dialog_name = collect_task.accounts[0].platform_id
+            params['dialog_name'] = collect_task.accounts[0].platform_id
 
+        if 'dialog_name' not in str(params):
+            params['dialog_name'] = None
         # Variables for searching through date range.
-        pre_first_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_from, limit=1)
-        first_msg = await client.get_messages(dialog_name, min_id=pre_first_msg[0].id, limit=1)
-        last_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_to, limit=1)
+        pre_first_msg = await client.get_messages(params['dialog_name'], offset_date=collect_task.date_from, limit=1)
+        params['first_msg'] = await client.get_messages(params['dialog_name'], min_id=pre_first_msg[0].id, limit=1)
+        params['last_msg'] = await client.get_messages(params['dialog_name'], offset_date=collect_task.date_to, limit=1)
 
-        offset = 0
-        while next_from:
-            messages = await client.get_messages(dialog_name,
-                                                 search=collect_task.query,
-                                                 min_id=last_msg[0].id,
-                                                 max_id=first_msg[0].id,
-                                                 add_offset=offset,
-                                                 limit=self.max_posts_per_call
-                                                 )
-
-            if len(messages) < params['count']:
-                next_from = False
-
-            offset += params['count']
-            posts += messages
-
-        maped_posts = self._map_to_posts(posts, collect_task)
-        print(f'{len(maped_posts)} posts collected from dialog: {dialog_name}')
+        for q in params['q']:
+            posts += await self.get_data(client, collect_task, params, q)
+        mapped_posts = self._map_to_posts(posts, collect_task)
+        print(f'{len(mapped_posts)} posts collected from dialog: {params["dialog_name"]}')
         await client.disconnect()
-        return maped_posts
+        return mapped_posts
 
 
 
@@ -162,7 +201,7 @@ class TelegramCollector(ABC):
         """
 
         scores = Scores(
-            likes=api_post.replies, # Temporarily saved to likes.
+            # likes=int(api_post.replies), # Temporarily saved to likes.
             shares=api_post.forwards,
         )
         post_doc = ''
@@ -189,6 +228,7 @@ class TelegramCollector(ABC):
                 post = self.map_to_post(post, collect_task)
                 res.append(post)
             except ValueError as e:
+                print(e)
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
