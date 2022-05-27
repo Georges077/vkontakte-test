@@ -1,5 +1,6 @@
 import os
 import requests
+from eldar import Query
 from typing import List, Dict
 from ibex.models.post import Post, Scores
 from ibex.models.collect_task import CollectTask
@@ -26,7 +27,10 @@ class VKCollector(ABC):
         # Variable for maximum number of requests
         self.max_requests = 22
 
-    def get_posts_by_params(self, params: Dict):
+    def get_posts_by_params(self, params: Dict, query: str, collect_task: CollectTask):
+
+        # Change of query parameter.
+        params['q'] = query
 
         # Returned data for call of get_posts method.
         data = self.get_posts(params)
@@ -39,23 +43,24 @@ class VKCollector(ABC):
 
         # iterator for checking maximum call of requests.
         post_iterator = 0
+
+        # Instance for data filter
+        eldar = Query(collect_task.query)
         while has_next:
             if 'next_from' not in data.keys():
                 has_next = False
-                posts = posts + data['items']
+                posts += [d for d in data['items'] if len(eldar.filter([d['text']])) > 0]
                 return posts
             else:
                 post_iterator += 1
                 data = self.get_posts(params, data['next_from'])
-                posts = posts + data['items']
+                posts += [d for d in data['items'] if len(eldar.filter([d['text']])) > 0]
             if post_iterator > self.max_requests:
                 break
         return posts
 
-
     def get_posts(self, params: Dict,  next_from=None):
         """ The method is responsible for actual get of data
-
         Args:
             params - Generated dictionary with all needed metadata
             next_from - Parameter for checking next portion of posts existence
@@ -71,7 +76,6 @@ class VKCollector(ABC):
         # Variable for data returned from request
         req = requests.get(url, params)
         return req.json()['response']
-
 
     def generate_req_params(self, collect_task: CollectTask):
         """ The method is responsible for generating params
@@ -90,7 +94,36 @@ class VKCollector(ABC):
         )
 
         if collect_task.query is not None and len(collect_task.query) > 0:
-            params['q'] = collect_task.query
+            query_arr = []
+            if ')' in collect_task.query.lower():
+                query = collect_task.query.lower()
+                q1 = query[:query.index(')')+5].replace(')', '').replace('(', '')
+                if q1.split()[-1] == 'and':
+                    query_arr = q1.split()[:-1]
+                    if 'or' in query_arr:
+                        query_arr.remove('or')
+                    if 'not' in query_arr:
+                        query_arr.pop(query_arr.index('not')+1)
+                        query_arr.remove('not')
+                else:
+                    query1 = collect_task.query.lower()
+                    q2 = ' '.join(query1.replace('(', '').replace(')', '').split()).replace('not ', 'nnn').split()
+                    q2 = [val for val in q2 if val != 'and' and val != 'or']
+                    q2 = [val for val in q2 if val != 'or']
+                    q2 = [val for val in q2 if 'nnn' not in val]
+                    q2 = list(dict.fromkeys(q2))
+                    query_arr = q2
+
+            q3 = collect_task.query.lower()
+            q3 = ' '.join(q3.split()).replace('not ', 'nnn').split()
+            q3 = [val for val in q3 if 'nnn' not in val]
+            q3 = [val for val in q3 if val != 'and' and val != 'or']
+            q3 = list(dict.fromkeys(q3))
+            if 'and' in collect_task.query.lower():
+                query_arr = [q3[0]]
+            else:
+                query_arr = q3
+            params['q'] = query_arr
         if collect_task.accounts is not None and len(collect_task.accounts) > 0:
             params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
         return params
@@ -112,7 +145,10 @@ class VKCollector(ABC):
         params = self.generate_req_params(collect_task)
 
         # list of posts returned by method
-        results: List[any] = self.get_posts_by_params(params)
+        results: List[any] = []
+        for query in params['q']:
+            print(query)
+            results += self.get_posts_by_params(params, query, collect_task)
 
         # list of posts with type of Post for every element
         posts = self._map_to_posts(results, params)
@@ -151,8 +187,8 @@ class VKCollector(ABC):
             (Post): class derived from API data.
         """
         scores = Scores(
-            likes=api_post['likes']['count'],
-            shares=api_post['reposts']['count'],
+            likes=api_post['likes']['count'] if 'likes' in api_post else None,
+            shares=api_post['reposts']['count'] if  'reposts' in api_post else None,
         )
         post_doc = Post(title=api_post['title'] if 'title' in api_post else "",
                         text=api_post['text'] if 'text' in api_post else "",
