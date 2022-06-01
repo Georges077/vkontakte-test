@@ -1,4 +1,3 @@
-import asyncio
 import os
 from datetime import datetime
 from eldar import Query
@@ -9,10 +8,11 @@ from ibex.models.post import Post, Scores
 from ibex.models.collect_task import CollectTask
 from ibex.models.platform import Platform
 from ibex.models.account import Account
-from abc import ABC
+from ibex.split import split_complex_query
+from ibex.datasource import Datasource
 
 
-class TelegramCollector(ABC):
+class TelegramCollector(Datasource):
     """The class for data collection from TelegramClient.
 
         All data collectors/data sources implement
@@ -28,181 +28,142 @@ class TelegramCollector(ABC):
 
         # TODO: double check the limit per post
         # Variable for maximum number of posts per request
-        self.max_posts_per_call = 10000
+        self.max_posts_per_call = 1000
+        self.max_posts_per_call_sample = 20
 
         # Variable for maximum number of requests
-        self.max_requests = 20
+        self.max_requests = 50
+        self.max_requests_sample = 1
 
-    def generate_req_params(self, collect_task: CollectTask):
-        params = dict(
-            count=self.max_posts_per_call,
-        )
-        if collect_task.query is not None and len(collect_task.query) > 0:
-            query_arr = []
-            if ')' in collect_task.query.lower():
-                query = collect_task.query.lower()
-                q1 = query[:query.index(')')+5].replace(')', '').replace('(', '')
-                if q1.split()[-1] == 'and':
-                    query_arr = q1.split()[:-1]
-                    if 'or' in query_arr:
-                        query_arr.remove('or')
-                    if 'not' in query_arr:
-                        query_arr.pop(query_arr.index('not')+1)
-                        query_arr.remove('not')
-                else:
-                    query1 = collect_task.query.lower()
-                    q2 = ' '.join(query1.replace('(', '').replace(')', '').split()).replace('not ', 'nnn').split()
-                    q2 = [val for val in q2 if val != 'and' and val != 'or']
-                    q2 = [val for val in q2 if val != 'or']
-                    q2 = [val for val in q2 if 'nnn' not in val]
-                    q2 = list(dict.fromkeys(q2))
-                    query_arr = q2
+        # Dict variable for boolean operators
+        self.operators = dict(or_=' OR ', and_=' AND ', not_=' NOT ')
 
-            q3 = collect_task.query.lower()
-            q3 = ' '.join(q3.split()).replace('not ', 'nnn').split()
-            q3 = [val for val in q3 if 'nnn' not in val]
-            q3 = [val for val in q3 if val != 'and' and val != 'or']
-            q3 = list(dict.fromkeys(q3))
-            if 'and' in collect_task.query.lower():
-                query_arr = [q3[0]]
-            else:
-                query_arr = q3
-            params['q'] = query_arr
+    async def get_keyword_with_least_posts(self, collect_task: CollectTask) -> str:
+        # split_complex_query splits query into words and statements
+        # keyword_1,           keyword_2,          keyword_3,      keyword_4
+        #        statement_1,         statement_2,       statement_3
+        keywords, statements = split_complex_query(collect_task.query, self.operators)
 
-        if collect_task.accounts is not None and len(collect_task.accounts) > 0:
-            params['groups'] = ','.join([account.platform_id for account in collect_task.accounts])
+        tmp_query = collect_task.query
+        keywords_with_hits_counts = []
+        for i, keyword in enumerate(keywords):
+            if statements[i - 1] == '_NOT': continue
+            collect_task.query = keyword
+            hits_count = await self.get_hits_count(collect_task)
+            keywords_with_hits_counts.append((keyword, hits_count))
 
-        return params
+        keywords_with_hits_counts.sort(key=lambda tup: tup[1])
 
-    async def get_data(self, client: TelegramClient, collect_task: CollectTask, params, q) -> List[types.Message]:
-        f_data = []
-        offset = 0
-        next_from = True
-        while next_from:
-            messages = await client.get_messages(params['dialog_name'],
-                                                     search=q,
-                                                     min_id=params['last_msg'][0].id,
-                                                     max_id=params['first_msg'][0].id,
-                                                     add_offset=offset,
-                                                     limit=self.max_posts_per_call
-                                                     )
-            if len(messages) < params['count']:
-                next_from = False
+        keyword_with_least_posts = keywords_with_hits_counts[0]
+        collect_task.query = tmp_query
+        return keyword_with_least_posts[0]
 
-            offset += params['count']
-            eldar = Query(collect_task.query)
-            for msg in messages:
-                if len(eldar.filter([msg.text])) > 0:
-                    f_data += [msg]
-        return f_data
+    async def get_first_and_last_message(self, dialog_name, collect_task):
+        first_msg = await self.client.get_messages(dialog_name, offset_date=collect_task.date_from, limit=1)
+        # first_msg = await self.client.get_messages(dialog_name, min_id=pre_first_msg[0].id, limit=1)
+        last_msg = await self.client.get_messages(dialog_name, offset_date=collect_task.date_to, limit=1)
+
+        return first_msg[0].id, last_msg[0].id
+
+    async def connect(self):
+        # Variable for TelegramClient instance
+        self.client = TelegramClient('username', self.id, self.hash)
+        try:
+            await self.client.disconnect()
+        except:
+            pass
+
+        await self.client.start()
 
     async def collect(self, collect_task: CollectTask) -> List[Post]:
         """The method is responsible for collecting posts
             from platforms.
-
         Args:
             collect_action(CollectTask): CollectTask object holds
                 all the metadata needed for data collection.
-
         Returns:
             (List[Post]): List of collected posts.
         """
+        self.max_requests_ = self.max_requests_sample if collect_task.sample else self.max_requests
+        self.max_posts_per_call_ = self.max_posts_per_call_sample if collect_task.sample else self.max_posts_per_call
 
-        # Dict variable for generated meta data.
-        params = self.generate_req_params(collect_task)
+        await self.connect()
 
-        # Variable for TelegramClient instance
-        client = TelegramClient('username', self.id, self.hash)
-        await client.start()
+        dialog_name = ''
+        if collect_task.accounts and collect_task.accounts[0]:
+            dialog_name = collect_task.accounts[0].platform_id
 
         # List variable for all posts data.
         posts = []
 
-        if collect_task.accounts:
-            params['dialog_name'] = collect_task.accounts[0].platform_id
+        # Boolean variable for looping through pages.
+        next_from = True
 
-        if 'dialog_name' not in str(params):
-            params['dialog_name'] = None
         # Variables for searching through date range.
-        pre_first_msg = await client.get_messages(params['dialog_name'], offset_date=collect_task.date_from, limit=1)
-        params['first_msg'] = await client.get_messages(params['dialog_name'], min_id=pre_first_msg[0].id, limit=1)
-        params['last_msg'] = await client.get_messages(params['dialog_name'], offset_date=collect_task.date_to, limit=1)
+        first_msg_id, last_msg_id = await self.get_first_and_last_message(dialog_name, collect_task)
 
-        for q in params['q']:
-            posts += await self.get_data(client, collect_task, params, q)
-        mapped_posts = self._map_to_posts(posts, collect_task)
-        print(f'{len(mapped_posts)} posts collected from dialog: {params["dialog_name"]}')
-        await client.disconnect()
-        return mapped_posts
+        init_query = await self.get_keyword_with_least_posts(collect_task)
+        requests_count = 0
+        while next_from:
+            messages = await self.client.get_messages(dialog_name,
+                                                      search=init_query,
+                                                      min_id=first_msg_id,
+                                                      max_id=last_msg_id,
+                                                      add_offset=requests_count * self.max_posts_per_call_,
+                                                      limit=self.max_posts_per_call_
+                                                      )
+            print('offset', requests_count * self.max_posts_per_call_)
+            eldar = Query(collect_task.query)
+            for msg in messages:
+                if len(eldar.filter([msg.text])) > 0:
+                    posts += messages
+            requests_count += 1
+            print(f'[Telegram] request # {requests_count} messages {len(messages)}')
 
+            if not len(posts):
+                print(f'[Telegram] No posts found for dialog: {dialog_name}')
+                break
 
+            if not len(messages):
+                print(f'[Telegram] All posts collected: {dialog_name}')
+                break
+
+            if requests_count >= self.max_requests_:
+                print(f'[Telegram] limit of {self.max_requests_} have been reached')
+                break
+
+        maped_posts = self.map_to_posts(posts, collect_task)
+        print(f'[Telegram] {len(maped_posts)} posts collected from dialog: {dialog_name}')
+
+        await self.client.disconnect()
+        return maped_posts
 
     async def get_hits_count(self, collect_task: CollectTask) -> int:
         """The method is responsible for collecting the number of posts,
             that satisfy all criterias in CollectTask object.
-
         Note:
             Do not collect actual posts here, this method is only
             applicable to platforms that provide this kind of information.
-
         Args:
             collect_action(CollectTask): CollectTask object holds
                 all the metadata needed for data collection.
-
         Returns:
             (int): Number of posts existing on the platform.
         """
+        return -1
 
-        # Dict variable for generated meta data.
-        params = self.generate_req_params(collect_task)
-
-        # Variable for TelegramClient instance
-        client = TelegramClient('name', self.id, self.hash)
-        await client.start()
-
-        # Boolean variable for looping through pages.
-        next_from = True
-
-        # Variable for storing number of posts.
-        hits_count = 0
-
-        # Variable for getting all the channels or chats for user.
-        dialog_name = ''
-        if collect_task.accounts:
-            dialog_name = collect_task.accounts[0].platform_id
-        # Variables for searching through date range.
-        pre_first_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_from, limit=1)
-        first_msg = await client.get_messages(dialog_name, min_id=pre_first_msg[0].id, limit=1)
-        last_msg = await client.get_messages(dialog_name, offset_date=collect_task.date_to, limit=1)
-
-        offset = 0
-        while next_from:
-            messages = await client.get_messages(dialog_name, search=collect_task.query, min_id=last_msg[0].id,
-                                                 max_id=first_msg[0].id, add_offset=offset,
-                                                 limit=params['count'])
-            if len(messages) < params['count']:
-                hits_count = offset + len(messages)
-                next_from = False
-            offset = offset + params['count']
-        await client.disconnect()
-        return hits_count
-
-    @staticmethod
-    def map_to_post(api_post: Dict, collect_task: CollectTask) -> Post:
+    def map_to_post(self, api_post: Dict, collect_task: CollectTask) -> Post:
         """The method is responsible for mapping data redudned by plarform api
             into Post class.
-
         Args:
             api_post: responce from platform API.
             collect_action(CollectTask): the metadata used for data collection task.
-
         Returns:
             (Post): class derived from API data.
         """
 
         scores = Scores(
-            # likes=int(api_post.replies), # Temporarily saved to likes.
-            shares=api_post.forwards,
+            shares=int(api_post.forwards),
         )
         post_doc = ''
         try:
@@ -221,69 +182,52 @@ class TelegramCollector(ABC):
             print(exc)
         return post_doc
 
-    def _map_to_posts(self, posts: List[Dict], collect_task: CollectTask):
+    def map_to_posts(self, posts: List[Dict], collect_task: CollectTask):
         res: List[Post] = []
         for post in posts:
             try:
                 post = self.map_to_post(post, collect_task)
                 res.append(post)
             except ValueError as e:
-                print(e)
                 self.log.error(f'[{collect_task.platform}] {e}')
         return res
 
-    def generate_params(self, query:str):
-        params = dict(
-            limit=5,
-        )
-        if query is not None and len(query) > 0:
-            params['q'] = query
-
-        return params
-
     async def get_accounts(self, query: str) -> List[Account]:
-        # Dict variable for generated meta data.
-        params = self.generate_params(query)
-
         # Variable for TelegramClient instance
         client = TelegramClient('username', self.id, self.hash)
         await client.start()
 
-
         dialogs = await client(functions.contacts.SearchRequest(
-            q=params['q'],
-            limit=params['limit'],
+            q=query,
+            limit=5,
         ))
 
         # List variable for all accounts data.
         accounts = self.map_to_accounts(dialogs.chats)
-
         return accounts
 
     def map_to_accounts(self, accounts: List) -> List[Account]:
         """The method is responsible for mapping data redudned by plarform api
-                   into Account class.
-
-               Args:
-                   accounts: responce from platform API.
-                   collect_action(CollectTask): the metadata used for data collection task.
-
-               Returns:
-                   (Account): class derived from API data.
-               """
+            into Account class.
+        Args:
+            accounts: responce from platform API.
+            collect_action(CollectTask): the metadata used for data collection task.
+        Returns:
+            (Account): class derived from API data.
+        """
         result: List[Account] = []
         for account in accounts:
             try:
-                account = self.map_to_acc(account)
+                account = self.map_to_account(account)
                 result.append(account)
             except ValueError as e:
                 print("Telegram", e)
         return result
 
-    def map_to_acc(self, acc: Account) -> Account:
+    def map_to_account(self, acc: Account) -> Account:
         mapped_account = Account(
             title=acc.title,
-            url='t.me/'+acc.username,
+            url='t.me/' + acc.username,
             platform=Platform.telegram,
             platform_id=acc.id,
             broadcasting_start_time=acc.date
