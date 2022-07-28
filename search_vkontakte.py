@@ -10,6 +10,7 @@ from ibex.models.account import Account
 from datetime import datetime
 from ibex.split import split_complex_query
 from ibex.datasource import Datasource
+import vk_api
 
 
 class VKCollector(Datasource):
@@ -101,11 +102,14 @@ class VKCollector(Datasource):
         req = requests.get(url, params)
         if 'response' not in str(req.json()):
             self.generate_token()
+            params['access_token'] = self.token
             req = requests.get(url, params)
         return req.json()['response']
 
     def generate_token(self):
-        requests.get('')
+        vk_session = vk_api.VkApi('+995595912192', 'gio51319702')
+        vk_session.auth()
+        self.token = vk_session.token['access_token']
 
     def generate_req_params(self, collect_task: CollectTask):
         """ The method is responsible for generating params
@@ -147,7 +151,9 @@ class VKCollector(Datasource):
         params = self.generate_req_params(collect_task)
 
         # list of posts returned by method
-        init_query = await self.get_keyword_with_least_posts(collect_task)
+        init_query = ' '
+        if ' OR ' not in collect_task.query:
+            init_query = await self.get_keyword_with_least_posts(collect_task)
         results: List[any] = self.get_posts_by_params(params, init_query, collect_task.query)
 
         # list of posts with type of Post for every element

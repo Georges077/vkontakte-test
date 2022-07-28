@@ -102,7 +102,9 @@ class TelegramCollector(Datasource):
         # Variables for searching through date range.
         first_msg_id, last_msg_id = await self.get_first_and_last_message(dialog_name, collect_task)
 
-        init_query = await self.get_keyword_with_least_posts(collect_task)
+        init_query = ' '
+        if ' OR ' not in collect_task.query:
+            init_query = await self.get_keyword_with_least_posts(collect_task)
         requests_count = 0
         while next_from:
             messages = await self.client.get_messages(dialog_name,
@@ -112,11 +114,11 @@ class TelegramCollector(Datasource):
                                                       add_offset=requests_count * self.max_posts_per_call_,
                                                       limit=self.max_posts_per_call_
                                                       )
-            print('offset', requests_count * self.max_posts_per_call_)
             eldar = Query(collect_task.query)
             for msg in messages:
-                if len(eldar.filter([msg.text])) > 0:
-                    posts += messages
+                if msg.text != None:
+                    if len(eldar.filter([msg.text])) > 0:
+                        posts += messages
             requests_count += 1
             print(f'[Telegram] request # {requests_count} messages {len(messages)}')
 
@@ -163,7 +165,7 @@ class TelegramCollector(Datasource):
         """
 
         scores = Scores(
-            shares=int(api_post.forwards),
+            # shares=int(api_post.forwards),
         )
         post_doc = ''
         try:
